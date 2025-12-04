@@ -224,6 +224,15 @@ class TrainerEngine:
 
     def process_video(self, video_path: Path, output_dir: Path, fps: int = 2):
         if self.stop_requested: return False
+        
+        # Full cleanup for fresh start
+        if output_dir.exists():
+            self.log("Cleaning up previous run data...")
+            try:
+                shutil.rmtree(output_dir)
+            except Exception as e:
+                self.log(f"Warning: Failed to clean cleanup {output_dir}: {e}")
+        
         output_dir.mkdir(parents=True, exist_ok=True)
         images_dir = output_dir / "images"
         images_dir.mkdir(exist_ok=True)
