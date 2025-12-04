@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse # Updated import
 import viser
 
 # Import Rich for beautiful console output
@@ -54,6 +54,7 @@ import io
 import contextlib
 with contextlib.redirect_stdout(io.StringIO()):
     viser_server = viser.ViserServer(host="0.0.0.0", port=8080)
+    viser_server.gui.configure_theme(dark_mode=True) # Fix: Dark Mode
 
 # Initialize Engine
 engine = TrainerEngine(viser_server)
@@ -66,6 +67,13 @@ async def get_index():
     if index_path.exists():
         return HTMLResponse(content=index_path.read_text(), status_code=200)
     return {"error": "Frontend not found"}
+
+@app.get("/download")
+async def download_ply():
+    ply_path = Path("workspace/data/checkpoints/final.ply")
+    if ply_path.exists():
+        return FileResponse(ply_path, media_type="application/octet-stream", filename="vibe_splat.ply")
+    return {"error": "Model not trained yet."}
 
 @app.post("/upload")
 async def upload_video(
@@ -184,6 +192,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "image_count": engine.image_count,
                 "pipeline_message": engine.pipeline_message,
                 "elapsed_time": elapsed,
+                "is_paused": engine.paused,
                 "logs": logs
             }
             await websocket.send_text(json.dumps(stats))

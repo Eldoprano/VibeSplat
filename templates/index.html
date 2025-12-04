@@ -115,10 +115,10 @@
                 </div>
 
                 <div class="grid grid-cols-2 gap-2 mb-2">
-                    <button onclick="train(true)" class="bg-green-700 hover:bg-green-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
+                    <button id="train-btn" onclick="train(true)" class="bg-green-700 hover:bg-green-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
                         <i class="fas fa-play"></i> RESUME
                     </button>
-                    <button onclick="control('pause')" class="bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
+                    <button id="pause-btn" onclick="togglePause()" class="bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
                         <i class="fas fa-pause"></i> PAUSE
                     </button>
                 </div>
@@ -130,6 +130,9 @@
                     <button onclick="renderVideo()" class="bg-yellow-700 hover:bg-yellow-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
                         <i class="fas fa-video"></i> RENDER
                     </button>
+                    <a href="/download" target="_blank" class="bg-blue-700 hover:bg-blue-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1 text-center decoration-0">
+                        <i class="fas fa-download"></i> MODEL
+                    </a>
                 </div>
             </div>
 
@@ -189,16 +192,6 @@
             </div>
             <div class="flex-1 relative bg-black">
                 <iframe id="viser-frame" class="viser-frame"></iframe>
-            </div>
-            
-            <!-- Training Control Overlay -->
-            <div class="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 backdrop-blur px-4 py-2 rounded-full border border-gray-700 shadow-xl opacity-0 transition-opacity duration-300" id="control-deck">
-                <button onclick="control('pause')" class="w-8 h-8 flex items-center justify-center rounded-full bg-gray-700 hover:bg-gray-600 text-white transition" title="Pause">
-                    <i class="fas fa-pause text-xs"></i>
-                </button>
-                <button onclick="control('resume')" class="w-8 h-8 flex items-center justify-center rounded-full bg-green-700 hover:bg-green-600 text-white transition" title="Resume">
-                    <i class="fas fa-play text-xs"></i>
-                </button>
             </div>
         </div>
     </div>
@@ -280,16 +273,47 @@
                 setStepStatus('step-colmap', data.checklist.colmap);
                 setStepStatus('step-train', data.checklist.train);
                 
-                const deck = document.getElementById('control-deck');
                 if (data.checklist.train === 'running') deck.classList.remove('opacity-0');
                 else deck.classList.add('opacity-0');
             }
 
-            // 4. Stats
+            // 4. Button States
+            const trainBtn = document.getElementById('train-btn');
+            const pauseBtn = document.getElementById('pause-btn');
+            
+            if (data.status === 'training') {
+                trainBtn.disabled = true;
+                trainBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                
+                pauseBtn.disabled = false;
+                pauseBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                
+                if (data.is_paused) {
+                    pauseBtn.innerHTML = '<i class="fas fa-play"></i> CONTINUE';
+                    pauseBtn.classList.replace('bg-gray-700', 'bg-green-700');
+                    pauseBtn.classList.replace('hover:bg-gray-600', 'hover:bg-green-600');
+                    document.getElementById('status-text').innerText = "PAUSED";
+                } else {
+                    pauseBtn.innerHTML = '<i class="fas fa-pause"></i> PAUSE';
+                    pauseBtn.classList.replace('bg-green-700', 'bg-gray-700');
+                    pauseBtn.classList.replace('hover:bg-green-600', 'hover:bg-gray-600');
+                }
+            } else {
+                // IDLE or COMPLETED or ERROR
+                trainBtn.disabled = false;
+                trainBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                trainBtn.innerHTML = '<i class="fas fa-play"></i> RESUME / TRAIN';
+                
+                pauseBtn.disabled = true;
+                pauseBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                pauseBtn.innerHTML = '<i class="fas fa-pause"></i> PAUSE';
+            }
+
+            // 5. Stats
             document.getElementById('stat-images').innerText = data.image_count || "-";
             document.getElementById('stat-step').innerText = data.step > 0 ? data.step : "-";
 
-            // 5. Progress Bar & Error Reset
+            // 6. Progress Bar & Error Reset
             let progress = 0;
             if (data.status === 'extracting') progress = 10;
             else if (data.status === 'colmap') progress = 30;
@@ -398,6 +422,13 @@
             const res = await fetch('/render', { method: 'POST' });
             const data = await res.json();
             appendLog("Video render started...");
+        }
+        
+        async function togglePause() {
+            const btn = document.getElementById('pause-btn');
+            const isPaused = btn.innerText.includes("CONTINUE");
+            const action = isPaused ? "resume" : "pause";
+            await control(action);
         }
 
         async function control(action) {

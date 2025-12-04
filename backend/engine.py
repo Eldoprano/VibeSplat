@@ -344,9 +344,60 @@ class TrainerEngine:
                 
                 if not self.train_cameras: raise Exception("No cameras found.")
 
+                # Initialization Logic (KNN-based scale estimation)
+                self.log("Computing initial scales via KNN...")
                 means = torch.tensor(points3d["xyz"], dtype=torch.float32, device=self.device, requires_grad=True)
-                scales = torch.ones((len(means), 3), dtype=torch.float32, device=self.device) * np.log(0.1) # Better init?
-                scales.requires_grad = True
+                
+                # Efficient KNN for scale initialization
+                with torch.no_grad():
+                    # If too many points, use a subset for estimation to avoid OOM
+                    # But for exact per-point scale, we need neighbor.
+                    # Simple chunked approach for N^2 avoidance?
+                    # For simple "VibeSplat", let's use a simplified heuristic if N is huge, or cdist if small.
+                    # Actually, let's use the standard pytorch3d/simple-knn approach if available? No.
+                    # Let's use a simple KDTree via scipy if available, or torch brute force in chunks.
+                    # Since we don't have scipy, let's use torch cdist in chunks.
+                    
+                    scales_init = torch.ones((len(means), 3), dtype=torch.float32, device=self.device)
+                    
+                    # Chunked KNN (K=3, average distance)
+                    chunk_size = 1024
+                    N = len(means)
+                    min_dists = []
+                    
+                    for i in range(0, N, chunk_size):
+                        end = min(i + chunk_size, N)
+                        batch = means[i:end]
+                        # Compute distance to all other points (heavy!) -> Actually we only need local.
+                        # If N > 10k, global cdist is too big.
+                        # Fallback: Use a fixed decent scale relative to scene extent.
+                        if N > 5000: 
+                            # Heuristic: Scene extent / 100
+                            # This is safer than crashing OOM
+                            scene_extent = (means.max(dim=0)[0] - means.min(dim=0)[0]).mean().item()
+                            avg_dist = max(scene_extent / 1000.0, 0.0001)
+                            min_dists.extend([avg_dist] * (end - i))
+                        else:
+                            dists = torch.cdist(batch, means) # [B, N]
+                            # Set self-distance to inf
+                            dists.fill_diagonal_(float('inf')) # Only works if batch is view of means? No.
+                            # We need to mask out the identity if batch is means.
+                            # If batch is subset, we mask [i:end] cols.
+                            for j in range(end-i):
+                                dists[j, i+j] = float('inf')
+                            
+                            k_dists, _ = dists.topk(k=3, dim=1, largest=False)
+                            avg = k_dists.mean(dim=1)
+                            min_dists.append(avg)
+                    
+                    if isinstance(min_dists, list) and isinstance(min_dists[0], torch.Tensor):
+                        dist_tensor = torch.cat(min_dists)
+                    else:
+                        dist_tensor = torch.tensor(min_dists, device=self.device)
+                        
+                    scales_init = torch.log(torch.clamp(dist_tensor, min=1e-7)).unsqueeze(1).repeat(1, 3)
+
+                scales = scales_init.clone().requires_grad_(True)
                 quats = torch.randn((len(means), 4), dtype=torch.float32, device=self.device); quats = F.normalize(quats, dim=-1); quats.requires_grad = True
                 opacities = torch.zeros((len(means)), dtype=torch.float32, device=self.device); opacities.requires_grad = True
                 rgbs = torch.tensor(points3d["rgb"], dtype=torch.float32, device=self.device) / 255.0
@@ -383,8 +434,8 @@ class TrainerEngine:
 
             self.log(f"Starting Loop from step {self.current_step} to {self.max_steps}...")
             
-            # Pre-compute black background
-            bg_color = torch.zeros(3, dtype=torch.float32, device=self.device)
+            # Pre-compute black background (Batch size 1)
+            bg_color = torch.zeros((1, 3), dtype=torch.float32, device=self.device)
 
             for step in range(self.current_step, self.max_steps):
                 if self.stop_requested: 
@@ -406,7 +457,7 @@ class TrainerEngine:
                     width=cam["width"], 
                     height=cam["height"],
                     sh_degree=0,
-                    backgrounds=bg_color # Fix: Dark background
+                    backgrounds=bg_color # Fix: Shape (1, 3)
                 )
                 
                 render_colors = render_colors.squeeze(0)
@@ -481,7 +532,7 @@ class TrainerEngine:
                                 width=W, 
                                 height=H,
                                 sh_degree=0,
-                                backgrounds=torch.zeros(3, device=self.device)
+                                backgrounds=torch.zeros((1, 3), device=self.device) # Fix: Shape (1, 3)
                             )
                              img = anim_color.squeeze(0).cpu().numpy()
                              img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
