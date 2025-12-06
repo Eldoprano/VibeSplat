@@ -7,6 +7,7 @@ import shutil
 import queue
 import re
 import threading
+import zipfile
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Tuple, NamedTuple
@@ -37,6 +38,22 @@ def qvec2rotmat(qvec):
          1 - 2 * qvec[1]**2 - 2 * qvec[2]**2]])
 
 class ColmapLoader:
+    # COLMAP camera model ID -> number of parameters
+    # https://github.com/colmap/colmap/blob/main/src/colmap/sensor/models.h
+    CAMERA_MODEL_PARAMS = {
+        0: 3,   # SIMPLE_PINHOLE: f, cx, cy
+        1: 4,   # PINHOLE: fx, fy, cx, cy
+        2: 4,   # SIMPLE_RADIAL: f, cx, cy, k
+        3: 5,   # RADIAL: f, cx, cy, k1, k2
+        4: 8,   # OPENCV: fx, fy, cx, cy, k1, k2, p1, p2
+        5: 9,   # OPENCV_FISHEYE: fx, fy, cx, cy, k1, k2, k3, k4
+        6: 12,  # FULL_OPENCV: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        7: 5,   # FOV: fx, fy, cx, cy, omega
+        8: 5,   # SIMPLE_RADIAL_FISHEYE: f, cx, cy, k
+        9: 6,   # RADIAL_FISHEYE: f, cx, cy, k1, k2
+        10: 4,  # THIN_PRISM_FISHEYE: fx, fy, cx, cy (+ more)
+    }
+    
     def __init__(self, model_path: Path, images_dir: Path):
         self.model_path = model_path
         self.images_dir = images_dir
@@ -59,16 +76,35 @@ class ColmapLoader:
                 model_id = struct.unpack("<i", f.read(4))[0]
                 width = struct.unpack("<Q", f.read(8))[0]
                 height = struct.unpack("<Q", f.read(8))[0]
-                params_cnt = {0: 3, 1: 4, 2: 4}.get(model_id, 3)
+                
+                # Get the correct number of params for this camera model
+                params_cnt = self.CAMERA_MODEL_PARAMS.get(model_id, 4)  # Default to 4
                 params = struct.unpack(f"<{params_cnt}d", f.read(8 * params_cnt))
+                
                 K = np.eye(3)
-                if model_id == 0 or model_id == 2: 
+                # Handle different camera models for intrinsics extraction
+                if model_id == 0:  # SIMPLE_PINHOLE
                     focal, cx, cy = params[0], params[1], params[2]
                     K[0, 0] = focal; K[1, 1] = focal; K[0, 2] = cx; K[1, 2] = cy
-                elif model_id == 1: 
-                    fx, fy, cx, cy = params
+                elif model_id == 1:  # PINHOLE
+                    fx, fy, cx, cy = params[0], params[1], params[2], params[3]
                     K[0, 0] = fx; K[1, 1] = fy; K[0, 2] = cx; K[1, 2] = cy
-                self.cameras[camera_id] = {"K": K, "w": width, "h": height}
+                elif model_id in [2, 3, 8, 9]:  # SIMPLE_RADIAL, RADIAL, *_FISHEYE
+                    focal, cx, cy = params[0], params[1], params[2]
+                    K[0, 0] = focal; K[1, 1] = focal; K[0, 2] = cx; K[1, 2] = cy
+                elif model_id in [4, 5, 6, 7, 10]:  # OPENCV variants, FOV, THIN_PRISM
+                    fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+                    K[0, 0] = fx; K[1, 1] = fy; K[0, 2] = cx; K[1, 2] = cy
+                else:
+                    # Unknown model, try to extract something reasonable
+                    if len(params) >= 4:
+                        fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+                        K[0, 0] = fx; K[1, 1] = fy; K[0, 2] = cx; K[1, 2] = cy
+                    else:
+                        focal = params[0] if params else max(width, height)
+                        K[0, 0] = focal; K[1, 1] = focal; K[0, 2] = width/2; K[1, 2] = height/2
+                        
+                self.cameras[camera_id] = {"K": K, "w": width, "h": height, "model_id": model_id}
 
     def _read_images_binary(self):
         with open(self.model_path / "images.bin", "rb") as f:
@@ -109,11 +145,20 @@ class ColmapLoader:
     def get_training_data(self, device="cuda"):
         cameras = []
         gt_images = []
+        skipped_no_cam = 0
+        skipped_no_img = 0
+        
         for img_id, img_data in self.images.items():
-            cam_info = self.cameras[img_data["camera_id"]]
+            camera_id = img_data["camera_id"]
+            if camera_id not in self.cameras:
+                skipped_no_cam += 1
+                continue  # Skip images with missing camera info
+            cam_info = self.cameras[camera_id]
             img_path = self.images_dir / img_data["name"]
             img = cv2.imread(str(img_path))
-            if img is None: continue
+            if img is None:
+                skipped_no_img += 1
+                continue
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img_tensor = torch.from_numpy(img).float() / 255.0
             gt_images.append(img_tensor.to(device))
@@ -123,7 +168,14 @@ class ColmapLoader:
             W2C[:3, :3] = R
             W2C[:3, 3] = T
             K = torch.tensor(cam_info["K"], dtype=torch.float32, device=device)
-            cameras.append({"viewmat": W2C, "K": K, "width": cam_info["w"], "height": cam_info["h"]})
+            cameras.append({"viewmat": W2C, "K": K, "width": cam_info["w"], "height": cam_info["h"], "name": img_data["name"]})
+        
+        # Log any skipped cameras for debugging
+        if skipped_no_cam > 0 or skipped_no_img > 0:
+            logger.warning(f"ColmapLoader: Skipped {skipped_no_cam} (no camera), {skipped_no_img} (no image file)")
+        
+        logger.info(f"ColmapLoader: Loaded {len(cameras)} cameras, {len(self.cameras)} camera models, {len(self.images)} images in model")
+        
         return cameras, gt_images, self.points3D
 
 # ... (SSIM - No Change) ...
@@ -180,7 +232,12 @@ class TrainerEngine:
         self.strategy = None
         self.strategy_state = None
         self.train_cameras = None
+        self.train_cameras = None
         self.animation_pose = None # (position, wxyz)
+        self.extracted_images_count = 0
+        self.used_images_count = 0
+        self.colmap_progress = {"stage": "", "current": 0, "total": 0}
+        self.current_data_dir = None
 
     def log(self, msg: str):
         logger.info(msg)
@@ -222,111 +279,304 @@ class TrainerEngine:
         for k in self.checklist:
             if self.checklist[k] == "running": self.checklist[k] = "pending"
 
-    def process_video(self, video_path: Path, output_dir: Path, fps: int = 2):
+    def process_video(self, input_path: Path, output_dir: Path, fps: int = 2, 
+                      smart_selection: bool = False, blur_filter: bool = False, 
+                      matcher_type: str = "sequential"):
         if self.stop_requested: return False
         
-        # Full cleanup for fresh start
-        if output_dir.exists():
-            self.log("Cleaning up previous run data...")
-            try:
-                shutil.rmtree(output_dir)
-            except Exception as e:
-                self.log(f"Warning: Failed to clean cleanup {output_dir}: {e}")
+        # Reset checklist for new run
+        for k in self.checklist:
+            self.checklist[k] = "pending"
+        self.extracted_images_count = 0
+        self.used_images_count = 0
         
-        output_dir.mkdir(parents=True, exist_ok=True)
         images_dir = output_dir / "images"
-        images_dir.mkdir(exist_ok=True)
+        
+        # If input is a directory, images are already there (multi-file upload)
+        if input_path.is_dir():
+            self.log(f"Using pre-uploaded images from {input_path.name}")
+            images_dir = input_path
+            self.checklist["extract"] = "completed"
+        else:
+            # Full cleanup for fresh start
+            if output_dir.exists():
+                self.log("Cleaning up previous run data...")
+                try:
+                    shutil.rmtree(output_dir)
+                except Exception as e:
+                    self.log(f"Warning: Failed to clean cleanup {output_dir}: {e}")
+            
+            output_dir.mkdir(parents=True, exist_ok=True)
+            images_dir.mkdir(exist_ok=True)
 
-        self.start_time = time.time()
-        self.status = "extracting"
-        self.pipeline_message = "Extracting Frames..."
-        self.checklist["extract"] = "running"
-        self.log(f"Processing video: {video_path.name} at {fps} FPS")
-
-        cmd = ["ffmpeg", "-y", "-i", str(video_path), "-qscale:v", "1", "-qmin", "1", "-vf", f"fps={fps}", str(images_dir / "%04d.jpg")]
-        try:
-            self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.current_process.wait()
-            if self.stop_requested: return False
-            if self.current_process.returncode != 0: raise Exception("FFmpeg failed")
-        finally:
-            self.current_process = None
+            self.start_time = time.time()
+            self.status = "extracting"
+            self.pipeline_message = "Processing Input..."
+            self.checklist["extract"] = "running"
+            
+            # 1. Extraction / Input Handling
+            if input_path.suffix.lower() == ".zip":
+                self.log(f"Extracting ZIP: {input_path.name}")
+                try:
+                    with zipfile.ZipFile(input_path, 'r') as zip_ref:
+                        zip_ref.extractall(images_dir)
+                    # Flatten if nested
+                    for root, dirs, files in os.walk(images_dir):
+                        for file in files:
+                            if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                                src = Path(root) / file
+                                dst = images_dir / file
+                                if src != dst: shutil.move(str(src), str(dst))
+                except Exception as e:
+                    self.log(f"ZIP Extraction failed: {e}")
+                    return False
+            else:
+                self.log(f"Extracting frames from video: {input_path.name} at {fps} FPS")
+                cmd = ["ffmpeg", "-y", "-i", str(input_path), "-qscale:v", "1", "-qmin", "1", "-vf", f"fps={fps}", str(images_dir / "%04d.jpg")]
+                try:
+                    self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.current_process.wait()
+                    if self.stop_requested: return False
+                    if self.current_process.returncode != 0: raise Exception("FFmpeg failed")
+                finally:
+                    self.current_process = None
+            
+            self.checklist["extract"] = "completed"
+        
+        all_images = sorted(list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png")) + list(images_dir.glob("*.jpeg")))
+        self.extracted_images_count = len(all_images)
         self.checklist["extract"] = "completed"
 
-        if self.stop_requested: return False
-        self.checklist["filter"] = "running"
-        self.pipeline_message = "Filtering Blurry Images..."
-        self.log("Running blur filter...")
-        images = list(images_dir.glob("*.jpg"))
-        if not images:
-            self.log("Error: No images extracted.")
+        if not all_images:
+            self.log("Error: No images found.")
             return False
 
-        count = 0
-        for img_path in images:
+        # 2. Filtering (Smart & Blur)
+        if self.stop_requested: return False
+        self.checklist["filter"] = "running"
+        self.pipeline_message = "Filtering Images..."
+        
+        kept_images = []
+        last_hash = None
+        
+        self.log(f"Filtering {len(all_images)} images (Smart: {smart_selection}, Blur: {blur_filter})...")
+        
+        for i, img_path in enumerate(all_images):
             if self.stop_requested: return False
+            if i % 10 == 0: self.pipeline_message = f"Filtering {i}/{len(all_images)}..."
+            
             img = cv2.imread(str(img_path))
             if img is None: continue
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            variance = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if variance < 100:
-                img_path.unlink()
-                count += 1
-        
-        self.image_count = len(list(images_dir.glob("*.jpg")))
-        self.log(f"Removed {count} blurry images. Using {self.image_count} images.")
-        self.checklist["filter"] = "completed"
+            
+            # Blur Check
+            if blur_filter:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+                if variance < 100: # Threshold
+                    img_path.unlink()
+                    continue
 
+            # Smart Selection (Cohesion/Similarity)
+            if smart_selection:
+                # Simple perceptual hash: resize to 8x8, gray, compare
+                # Or just use histogram correlation for speed/robustness
+                # Let's use Histogram
+                hist = cv2.calcHist([img], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+                hist = cv2.normalize(hist, hist).flatten()
+                
+                if last_hash is not None:
+                    score = cv2.compareHist(last_hash, hist, cv2.HISTCMP_CORREL)
+                    # If too similar (> 0.95), skip (duplicate/static)
+                    # If too different (< 0.3), maybe keep (cut)? 
+                    # User wants "cohesion", so maybe we want to avoid blurry transitions?
+                    # Actually, usually we want to avoid DUPES.
+                    if score > 0.98:
+                        img_path.unlink()
+                        continue
+                last_hash = hist
+
+            kept_images.append(img_path)
+
+        self.used_images_count = len(kept_images)
+        self.log(f"Filtering complete. Used {self.used_images_count} / {self.extracted_images_count} images.")
+        self.checklist["filter"] = "completed"
+        
+        if self.used_images_count < 10:
+             self.log("Warning: Very few images remaining. Reconstruction might fail.")
+
+        # 3. COLMAP
         if self.stop_requested: return False
         self.status = "colmap"
         self.checklist["colmap"] = "running"
         self.pipeline_message = "COLMAP Reconstruction..."
-        self.log("Starting COLMAP reconstruction...")
+        self.log(f"Starting COLMAP ({matcher_type})...")
         
-        colmap_cmd = [
-            "colmap", "automatic_reconstructor", 
-            "--workspace_path", str(output_dir), 
-            "--image_path", str(images_dir), 
-            "--quality", "medium",
-            "--use_gpu", "1"
+        # Feature Extraction
+        extract_cmd = [
+            "colmap", "feature_extractor",
+            "--database_path", str(output_dir / "database.db"),
+            "--image_path", str(images_dir),
+            "--ImageReader.camera_model", "OPENCV",
+            "--SiftExtraction.use_gpu", "1"
         ]
+        self._run_colmap_command(extract_cmd, "Extracting Features")
+        if self.stop_requested: return False
+
+        # Matching
+        matcher_cmd = ["colmap", f"{matcher_type}_matcher", 
+                       "--database_path", str(output_dir / "database.db"),
+                       "--SiftMatching.use_gpu", "1"]
+        self._run_colmap_command(matcher_cmd, "Matching Features")
+        if self.stop_requested: return False
+
+        # Mapper
+        output_dir.joinpath("sparse").mkdir(exist_ok=True)
+        mapper_cmd = [
+            "colmap", "mapper",
+            "--database_path", str(output_dir / "database.db"),
+            "--image_path", str(images_dir),
+            "--output_path", str(output_dir / "sparse"),
+            "--Mapper.ba_global_function_tolerance", "0.000001"
+        ]
+        self._run_colmap_command(mapper_cmd, "Reconstructing 3D")
+        if self.stop_requested: return False
+
+        # Post-processing: Select the best COLMAP model (most registered images)
+        sparse_dir = output_dir / "sparse"
         
-        self.current_process = subprocess.Popen(colmap_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        # Handle case where COLMAP outputs directly to sparse/ instead of sparse/0/
+        if (sparse_dir / "cameras.bin").exists():
+            sparse_dest = sparse_dir / "0"
+            sparse_dest.mkdir(exist_ok=True)
+            for f in ["cameras.bin", "images.bin", "points3D.bin"]:
+                src = sparse_dir / f
+                if src.exists(): shutil.move(str(src), str(sparse_dest / f))
+        
+        # Find the best model (most registered images)
+        best_model = self._select_best_colmap_model(sparse_dir)
+        if best_model is None:
+            self.log("CRITICAL: No valid COLMAP reconstruction found!")
+            return False
+        
+        # If best model is not sparse/0, move it there for consistency
+        if best_model.name != "0":
+            self.log(f"Selected model '{best_model.name}' as best (has most registered images)")
+            target = sparse_dir / "0"
+            backup = sparse_dir / "0_backup"
+            if target.exists():
+                shutil.move(str(target), str(backup))
+            shutil.move(str(best_model), str(target))
+        
+        # Log how many images were registered
+        with open(sparse_dir / "0" / "images.bin", "rb") as f:
+            num_images = struct.unpack("<Q", f.read(8))[0]
+        self.log(f"COLMAP finished successfully. Registered {num_images} images.")
+        self.checklist["colmap"] = "completed"
+        return True
+    
+    def _select_best_colmap_model(self, sparse_dir: Path) -> Optional[Path]:
+        """Find the COLMAP model with the most registered images.
+        
+        Also considers models with at least 20% of input images as viable,
+        and logs all model statistics for debugging.
+        """
+        models_info = []
+        
+        for model_dir in sparse_dir.iterdir():
+            if not model_dir.is_dir():
+                continue
+            images_bin = model_dir / "images.bin"
+            points_bin = model_dir / "points3D.bin"
+            if not images_bin.exists():
+                continue
+            
+            try:
+                with open(images_bin, "rb") as f:
+                    num_images = struct.unpack("<Q", f.read(8))[0]
+                
+                num_points = 0
+                if points_bin.exists():
+                    with open(points_bin, "rb") as f:
+                        num_points = struct.unpack("<Q", f.read(8))[0]
+                
+                models_info.append({
+                    "dir": model_dir,
+                    "images": num_images,
+                    "points": num_points,
+                    "name": model_dir.name
+                })
+            except Exception as e:
+                self.log(f"Warning: Could not read {images_bin}: {e}")
+        
+        if not models_info:
+            return None
+        
+        # Sort by number of images (primary) and points (secondary)
+        models_info.sort(key=lambda x: (x["images"], x["points"]), reverse=True)
+        
+        # Log all models
+        self.log(f"Found {len(models_info)} COLMAP reconstruction(s):")
+        for i, m in enumerate(models_info):
+            coverage = int(100 * m["images"] / self.used_images_count) if self.used_images_count > 0 else 0
+            marker = "→" if i == 0 else " "
+            self.log(f"  {marker} Model '{m['name']}': {m['images']} images ({coverage}%), {m['points']} points")
+        
+        # Consider models with at least 20% coverage as "viable"
+        min_images_threshold = max(5, int(0.2 * self.used_images_count))
+        viable_models = [m for m in models_info if m["images"] >= min_images_threshold]
+        
+        if not viable_models:
+            # No good models, use the best available
+            self.log(f"Warning: No model has 20%+ coverage, using best available")
+            return models_info[0]["dir"]
+        
+        # Return the best viable model (most images)
+        best = viable_models[0]
+        if len(viable_models) > 1:
+            self.log(f"Selected model '{best['name']}' ({len(viable_models)} viable models found)")
+        
+        return best["dir"]
+
+    def _run_colmap_command(self, cmd, stage_name):
+        self.pipeline_message = f"COLMAP: {stage_name}..."
+        self.colmap_progress = {"stage": stage_name, "current": 0, "total": 0}
+        self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         while True:
             if self.stop_requested:
                 self.current_process.terminate()
-                return False
+                return
             line = self.current_process.stdout.readline()
             if not line and self.current_process.poll() is not None: break
             if line:
                 line = line.strip()
-                if "Processed file" in line or "Matching block" in line: continue
-                self.log(f"[COLMAP] {line}")
-                if "Extracting features" in line: self.pipeline_message = "COLMAP: Extracting..."
-                elif "Matching features" in line: self.pipeline_message = "COLMAP: Matching..."
-                elif "Reconstruction" in line: self.pipeline_message = "COLMAP: Reconstructing..."
+                # Parse progress
+                # "Processed file 5 / 100"
+                if "Processed file" in line:
+                     parts = line.split()
+                     if len(parts) >= 4 and parts[-2] == "/":
+                         try:
+                             current = int(parts[-3])
+                             total = int(parts[-1])
+                             self.colmap_progress = {"stage": stage_name, "current": current, "total": total}
+                             pct = int(100 * current / total) if total > 0 else 0
+                             self.pipeline_message = f"{stage_name}: {current}/{total} ({pct}%)"
+                         except ValueError:
+                             pass
+                elif "Registering image" in line:
+                     # Registering image #5 (5)
+                     parts = line.split("#")
+                     if len(parts) > 1:
+                         img_num = parts[1].split('(')[0].strip()
+                         self.pipeline_message = f"{stage_name}: Registering #{img_num}"
+                elif "Elapsed time" in line:
+                     # COLMAP reports elapsed time at the end of each stage
+                     self.log(f"[COLMAP] {line}")
+                
+                if "warning" in line.lower() or "error" in line.lower():
+                    self.log(f"[COLMAP] {line}")
         
-        ret = self.current_process.poll()
-        self.current_process = None
-        if ret != 0:
-            if self.stop_requested: return False
-            self.log(f"COLMAP failed with return code {ret}.")
-            return False
-
-        if not (output_dir / "sparse/0/cameras.bin").exists():
-             if (output_dir / "sparse/cameras.bin").exists():
-                sparse_dest = output_dir / "sparse/0"
-                sparse_dest.mkdir(exist_ok=True)
-                for f in ["cameras.bin", "images.bin", "points3D.bin"]:
-                    src = output_dir / "sparse" / f
-                    if src.exists(): shutil.move(str(src), str(sparse_dest / f))
-             else:
-                self.log("CRITICAL: COLMAP failed to produce sparse/0/cameras.bin")
-                raise Exception("COLMAP Reconstruction Failed.")
-
-        self.log("COLMAP finished successfully.")
-        self.checklist["colmap"] = "completed"
-        return True
+        if self.current_process.returncode != 0:
+            raise Exception(f"COLMAP {stage_name} failed.")
 
     def start_training(self, data_dir: Path, max_steps: int = 3000, resume: bool = False):
         if self.training_future and not self.training_future.done(): return
@@ -345,6 +595,7 @@ class TrainerEngine:
 
     def _training_loop(self, data_dir: Path, resume: bool):
         self.log(f"Initializing Training (gsplat 1.4.0 engine) - Resume: {resume}...")
+        self.current_data_dir = data_dir
         try:
             if not resume or self.params is None:
                 sparse_path = data_dir / "sparse/0"
@@ -559,6 +810,8 @@ class TrainerEngine:
                 self.pipeline_message = "Done!"
                 self.log("Training Finished Successfully.")
                 self.save_ply(data_dir / "checkpoints/final.ply", self.params)
+                self.render_video(data_dir) # Auto-render
+
 
         except Exception as e:
             self.log(f"Training CRASHED: {e}")
@@ -568,33 +821,91 @@ class TrainerEngine:
     def update_viser_scene(self, params):
         if not self.viser_server: return
         
-        # Update Cameras
-        if self.train_cameras:
-             for i, cam in enumerate(self.train_cameras):
-                  # Viser expects standard [R|t]
-                  # cam["viewmat"] is W2C (4x4)
-                  # We need C2W for position and quaternion
-                  c2w = torch.inverse(cam["viewmat"]).cpu().numpy()
-                  # viser.scene.add_camera_frustum uses wxyz orientation and position
-                  # But converting 4x4 to pos/quat is easier with utilities, or manually
-                  # c2w is [ [R, t], [0, 1] ]
-                  R = c2w[:3, :3]
-                  t = c2w[:3, 3]
-                  
-                  # Convert R to wxyz
-                  # Or just use add_camera_frustum(..., wxyz=..., position=...)
-                  # We can use trimesh or scipy, but we have qvec2rotmat... need reverse?
-                  # Let's just use a simple frustum visualizer or just points for now if complex.
-                  # Actually, viser has a nice helper if we just pass the pose.
-                  self.viser_server.scene.add_camera_frustum(
-                      f"/cameras/cam_{i}",
-                      fov=2 * math.atan(0.5 * cam["height"] / cam["K"][1,1].item()),
-                      aspect=cam["width"] / cam["height"],
-                      scale=0.1,
-                      wxyz=viser.transforms.SO3.from_matrix(R).wxyz,
-                      position=t,
-                      color=(255, 255, 0)
-                  )
+        # Get images directory for loading thumbnails
+        images_dir = None
+        if self.current_data_dir:
+            images_dir = self.current_data_dir / "images"
+        
+        # Update Cameras - only on first update (step 0)
+        # This avoids re-adding cameras every 50 steps which can cause flicker
+        if self.train_cameras and self.current_step == 0:
+            num_cams = len(self.train_cameras)
+            self.log(f"Displaying {num_cams} cameras in viewport...")
+            
+            # Preload all thumbnails once
+            thumbnails = {}
+            if images_dir:
+                for i, cam in enumerate(self.train_cameras):
+                    if not cam.get("name"):
+                        continue
+                    img_path = images_dir / cam["name"]
+                    if img_path.exists():
+                        try:
+                            thumb = cv2.imread(str(img_path))
+                            if thumb is not None:
+                                thumb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
+                                # Resize for performance but keep decent quality
+                                h, w = thumb.shape[:2]
+                                target_size = 512
+                                scale_factor = min(target_size / w, target_size / h)
+                                new_w = int(w * scale_factor)
+                                new_h = int(h * scale_factor)
+                                thumb = cv2.resize(thumb, (new_w, new_h))
+                                thumbnails[i] = thumb
+                        except Exception:
+                            pass
+            
+            for i, cam in enumerate(self.train_cameras):
+                try:
+                    # cam["viewmat"] is W2C (4x4)
+                    # We need C2W for position and quaternion
+                    c2w = torch.inverse(cam["viewmat"]).cpu().numpy()
+                    R = c2w[:3, :3]
+                    t = c2w[:3, 3]
+                    
+                    # Calculate FoV
+                    fov_y = 2 * math.atan(0.5 * cam["height"] / cam["K"][1,1].item())
+                    aspect = cam["width"] / cam["height"]
+                    
+                    # Calculate camera orientation
+                    wxyz = viser.transforms.SO3.from_matrix(R).wxyz
+                    
+                    # Frustum scale - determines the "depth" of the frustum visualization
+                    frustum_scale = 0.25  # Larger for visibility
+                    
+                    # Add Frustum
+                    self.viser_server.scene.add_camera_frustum(
+                        f"/cameras/cam_{i}",
+                        fov=fov_y,
+                        aspect=aspect,
+                        scale=frustum_scale,
+                        wxyz=wxyz,
+                        position=t,
+                        color=(255, 200, 50),
+                        image=thumbnails.get(i)  # Viser can display image directly on frustum!
+                    )
+                    
+                    # Add Clickable Sphere at camera position
+                    node = self.viser_server.scene.add_icosphere(
+                        f"/cameras/cam_{i}/click",
+                        radius=0.04,
+                        color=(255, 200, 50),
+                        position=t
+                    )
+                    
+                    # Capture values by VALUE for click handler
+                    def make_click_handler(pos, rot, img_name):
+                        def handler(event):
+                            event.client.camera.position = pos
+                            event.client.camera.wxyz = viser.transforms.SO3.from_matrix(rot).wxyz
+                            self.log(f"Jumped to camera: {img_name}")
+                        return handler
+                    
+                    node.on_click(make_click_handler(t.copy(), R.copy(), cam.get("name", f"cam_{i}")))
+                    
+                except Exception as e:
+                    self.log(f"Warning: Failed to add camera {i}: {e}")
+
 
         with torch.no_grad():
             means = params["means"]

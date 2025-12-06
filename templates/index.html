@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,49 +8,105 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { background-color: #0f0f11; color: #e0e0e0; }
-        .viser-frame { width: 100%; height: 100%; border: none; background: #000; }
-        .glass-panel { background: rgba(30, 30, 35, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
-        .scrollbar-thin::-webkit-scrollbar { width: 6px; }
-        .scrollbar-thin::-webkit-scrollbar-track { background: #1a1a1a; }
-        .scrollbar-thin::-webkit-scrollbar-thumb { background: #4a4a4a; border-radius: 3px; }
-        
-        @keyframes pulse-ring {
-            0% { transform: scale(0.33); }
-            80%, 100% { opacity: 0; }
+        body {
+            background-color: #0f0f11;
+            color: #e0e0e0;
         }
+
+        .viser-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: #000;
+        }
+
+        .glass-panel {
+            background: rgba(30, 30, 35, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #4a4a4a;
+            border-radius: 3px;
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.33);
+            }
+
+            80%,
+            100% {
+                opacity: 0;
+            }
+        }
+
         .pulse-ring::before {
             content: '';
             position: absolute;
-            height: 100%; width: 100%;
+            height: 100%;
+            width: 100%;
             background-color: inherit;
             border-radius: 50%;
             animation: pulse-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
         }
+
         @keyframes shimmer {
-            100% { transform: translateX(100%); }
+            100% {
+                transform: translateX(100%);
+            }
         }
+
         .animate-shimmer {
             animation: shimmer 2s infinite;
         }
+
+        .collapsible-content {
+            transition: max-height 0.3s ease-out;
+            overflow: hidden;
+            max-height: 500px;
+        }
+
+        .collapsed {
+            max-height: 0px;
+        }
+
+        .rotate-180 {
+            transform: rotate(180deg);
+        }
     </style>
 </head>
+
 <body class="h-screen flex flex-col p-6 font-sans overflow-hidden">
 
     <!-- Top: Progress Header -->
     <div class="w-full mb-4">
         <div class="flex justify-between items-end mb-2">
-            <h1 class="text-2xl font-bold tracking-tight text-white">OpenSplat <span class="text-blue-500">Pro</span></h1>
+            <h1 class="text-2xl font-bold tracking-tight text-white">OpenSplat <span class="text-blue-500">Pro</span>
+            </h1>
             <div class="text-right flex items-center gap-4">
-                 <button id="cancel-btn" onclick="control('cancel')" class="hidden bg-red-900/80 hover:bg-red-700 border border-red-600 text-red-100 px-3 py-1 rounded text-xs font-bold transition uppercase tracking-wide animate-pulse">
+                <button id="cancel-btn" onclick="control('cancel')"
+                    class="hidden bg-red-900/80 hover:bg-red-700 border border-red-600 text-red-100 px-3 py-1 rounded text-xs font-bold transition uppercase tracking-wide animate-pulse">
                     <i class="fas fa-stop-circle mr-1"></i> Cancel Job
-                 </button>
-                 <span id="pipeline-msg" class="text-sm font-mono text-blue-400">Ready</span>
+                </button>
+                <span id="pipeline-msg" class="text-sm font-mono text-blue-400">Ready</span>
             </div>
         </div>
         <div class="w-full bg-gray-800 rounded-full h-2.5 mb-1 overflow-hidden">
-            <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500 relative" style="width: 0%">
-                <div class="absolute top-0 right-0 bottom-0 w-full bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 animate-shimmer"></div>
+            <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500 relative"
+                style="width: 0%">
+                <div
+                    class="absolute top-0 right-0 bottom-0 w-full bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 animate-shimmer">
+                </div>
             </div>
         </div>
         <div class="flex justify-between text-xs text-gray-400 uppercase font-semibold tracking-wider mt-1">
@@ -57,139 +114,226 @@
             <span id="timer">00:00</span>
         </div>
     </div>
-    
+
     <!-- Error Alert -->
-    <div id="error-alert" class="hidden w-full bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded relative mb-4" role="alert">
+    <div id="error-alert"
+        class="hidden w-full bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded relative mb-4"
+        role="alert">
         <i class="fas fa-exclamation-triangle mr-2"></i>
         <strong class="font-bold">System Error!</strong>
         <span class="block sm:inline" id="error-msg">Check the terminal for details.</span>
     </div>
 
-    <!-- Middle: Main Workspace -->
-    <div class="flex-1 flex gap-6 min-h-0">
-        
-        <!-- Left: Controls & Stats -->
-        <div class="w-1/4 flex flex-col gap-4 min-w-[320px]">
-            
-            <!-- Upload & Settings Panel -->
-            <div class="glass-panel rounded-xl p-5">
-                <h2 class="text-sm font-semibold mb-3 text-gray-300 uppercase tracking-wide">1. Configuration</h2>
-                
-                <div class="grid grid-cols-2 gap-3 mb-4">
-                    <div>
-                        <label class="block text-[10px] text-gray-500 mb-1 uppercase">FPS Extraction</label>
-                        <select id="fps-select" class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
-                            <option value="1">1 FPS (Sparse)</option>
-                            <option value="2" selected>2 FPS (Balanced)</option>
-                            <option value="5">5 FPS (Dense)</option>
-                            <option value="10">10 FPS (Heavy)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[10px] text-gray-500 mb-1 uppercase">COLMAP Quality</label>
-                        <select id="quality-select" class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
-                            <option value="low">Fast</option>
-                            <option value="medium" selected>Medium</option>
-                            <option value="high">High Quality</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="border-2 border-dashed border-gray-700 bg-gray-800/30 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-gray-800/50 transition cursor-pointer group" id="drop-zone">
-                    <i class="fas fa-cloud-upload-alt text-2xl text-gray-500 group-hover:text-blue-400 mb-2 transition"></i>
-                    <p class="text-xs text-gray-400 font-medium truncate" id="file-name-display">Drag video here</p>
-                    <input type="file" id="file-input" class="hidden" accept="video/*">
-                </div>
-                <button id="upload-btn" class="w-full mt-3 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg text-sm font-bold transition shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                    START PIPELINE
+    <!-- Video Modal -->
+    <div id="video-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm">
+        <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 max-w-4xl w-full relative shadow-2xl">
+            <button onclick="closeVideo()"
+                class="absolute -top-3 -right-3 bg-red-600 hover:bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg transition z-10">
+                <i class="fas fa-times"></i>
+            </button>
+            <h3 class="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                <i class="fas fa-film text-blue-500"></i> Training Evolution
+            </h3>
+            <div class="relative aspect-video bg-black rounded-lg overflow-hidden border border-gray-800 mb-4">
+                <video id="training-video" class="w-full h-full object-contain" loop controls autoplay muted>
+                    <source src="" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+            <div class="flex justify-end gap-3">
+                <a id="download-video-btn" href="#" download="training_evolution.mp4"
+                    class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2">
+                    <i class="fas fa-download"></i> Save Video
+                </a>
+                <button onclick="closeVideo()"
+                    class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition">
+                    Close
                 </button>
             </div>
-            
-            <!-- Training Controls -->
+        </div>
+    </div>
+
+    <!-- Middle: Main Workspace -->
+    <div class="flex-1 flex gap-6 min-h-0">
+
+        <!-- Left: Controls & Stats -->
+        <div class="w-1/4 flex flex-col gap-4 min-w-[320px]">
+
+            <!-- Upload & Settings Panel -->
             <div class="glass-panel rounded-xl p-5">
-                <h2 class="text-sm font-semibold mb-3 text-gray-300 uppercase tracking-wide">2. Training Controls</h2>
-                
-                <div class="mb-3">
-                     <label class="block text-[10px] text-gray-500 mb-1 uppercase">Max Steps</label>
-                     <input type="number" id="max-steps" value="3000" class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
+                <div class="flex justify-between items-center mb-3 cursor-pointer"
+                    onclick="togglePanel('config-panel', 'config-chevron')">
+                    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">1. Configuration</h2>
+                    <i id="config-chevron"
+                        class="fas fa-chevron-down text-gray-500 transition-transform duration-300"></i>
                 </div>
 
-                <div class="grid grid-cols-2 gap-2 mb-2">
-                    <button id="train-btn" onclick="train(true)" class="bg-green-700 hover:bg-green-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
-                        <i class="fas fa-play"></i> RESUME
-                    </button>
-                    <button id="pause-btn" onclick="togglePause()" class="bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
-                        <i class="fas fa-pause"></i> PAUSE
+                <div id="config-panel" class="collapsible-content">
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">FPS Extraction</label>
+                            <select id="fps-select"
+                                class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
+                                <option value="1">1 FPS (Sparse)</option>
+                                <option value="2" selected>2 FPS (Balanced)</option>
+                                <option value="5">5 FPS (Dense)</option>
+                                <option value="10">10 FPS (Heavy)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">COLMAP Matcher</label>
+                            <select id="matcher-select"
+                                class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
+                                <option value="sequential" selected>Sequential (Video)</option>
+                                <option value="exhaustive">Exhaustive (Images)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="flex items-center gap-2 bg-gray-800/50 p-2 rounded border border-gray-700/50">
+                            <input type="checkbox" id="blur-filter"
+                                class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-0">
+                            <label for="blur-filter"
+                                class="text-[10px] text-gray-300 uppercase cursor-pointer select-none">Blur
+                                Filter</label>
+                        </div>
+                        <div class="flex items-center gap-2 bg-gray-800/50 p-2 rounded border border-gray-700/50">
+                            <input type="checkbox" id="smart-selection"
+                                class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-0">
+                            <label for="smart-selection"
+                                class="text-[10px] text-gray-300 uppercase cursor-pointer select-none">Smart
+                                Select</label>
+                        </div>
+                    </div>
+
+                    <div class="border-2 border-dashed border-gray-700 bg-gray-800/30 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-gray-800/50 transition cursor-pointer group"
+                        id="drop-zone">
+                        <i
+                            class="fas fa-cloud-upload-alt text-2xl text-gray-500 group-hover:text-blue-400 mb-2 transition"></i>
+                        <p class="text-xs text-gray-400 font-medium truncate" id="file-name-display">Drag Video or ZIP
+                            here</p>
+                        <input type="file" id="file-input" class="hidden" accept="video/*,.zip,image/*" multiple>
+                    </div>
+                    <button id="upload-btn"
+                        class="w-full mt-3 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg text-sm font-bold transition shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                        START PIPELINE
                     </button>
                 </div>
-                
-                <div class="grid grid-cols-2 gap-2">
-                    <button onclick="setAnimationView()" class="bg-purple-700 hover:bg-purple-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1" title="Save current Viser view">
-                        <i class="fas fa-camera"></i> SET VIEW
+            </div>
+
+            <!-- Training Controls -->
+            <div class="glass-panel rounded-xl p-5">
+                <div class="flex justify-between items-center mb-3 cursor-pointer"
+                    onclick="togglePanel('train-panel', 'train-chevron')">
+                    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">2. Training Controls</h2>
+                    <i id="train-chevron"
+                        class="fas fa-chevron-down text-gray-500 transition-transform duration-300"></i>
+                </div>
+
+                <div id="train-panel" class="collapsible-content">
+                    <div class="mb-3">
+                        <div class="flex justify-between text-[10px] text-gray-500 mb-1 uppercase">
+                            <span>Training Steps</span>
+                            <span id="step-progress-text" class="text-blue-400">0 / 3000</span>
+                        </div>
+                        <div class="w-full bg-gray-800 rounded-full h-1.5 mb-2 overflow-hidden">
+                            <div id="step-progress-bar"
+                                class="bg-green-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%">
+                            </div>
+                        </div>
+                        <input type="range" id="max-steps-slider" min="500" max="10000" step="500" value="3000"
+                            class="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600 mb-1">
+                        <div class="flex justify-between text-[9px] text-gray-600">
+                            <span>500</span>
+                            <span id="max-steps-display" class="text-white font-bold">3000</span>
+                            <span>10000</span>
+                        </div>
+                    </div>
+
+                    <button id="play-pause-btn" onclick="togglePlayPause()"
+                        class="w-full bg-green-700 hover:bg-green-600 text-white py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2 mb-2">
+                        <i id="play-pause-icon" class="fas fa-play"></i>
+                        <span id="play-pause-text">START TRAINING</span>
                     </button>
-                    <button onclick="renderVideo()" class="bg-yellow-700 hover:bg-yellow-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1">
-                        <i class="fas fa-video"></i> RENDER
-                    </button>
-                    <a href="/download" target="_blank" class="bg-blue-700 hover:bg-blue-600 text-white py-1.5 rounded text-xs font-bold transition flex items-center justify-center gap-1 text-center decoration-0">
-                        <i class="fas fa-download"></i> MODEL
+
+                    <a href="/download" target="_blank"
+                        class="w-full bg-blue-700 hover:bg-blue-600 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 text-center decoration-0">
+                        <i class="fas fa-download"></i> DOWNLOAD MODEL
                     </a>
                 </div>
             </div>
 
             <!-- Pipeline Checklist & Stats -->
             <div class="glass-panel rounded-xl p-5 flex-1 flex flex-col min-h-0">
-                <h2 class="text-sm font-semibold mb-3 text-gray-300 uppercase tracking-wide">3. Pipeline Progress</h2>
-                
-                <!-- Checklist -->
-                <div class="space-y-3 mb-6">
-                    <div class="flex items-center justify-between text-sm" id="step-extract">
-                        <span class="text-gray-400 flex items-center gap-2"><i class="fas fa-film w-4 text-center"></i> Extract Frames</span>
-                        <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
-                    </div>
-                    <div class="flex items-center justify-between text-sm" id="step-filter">
-                        <span class="text-gray-400 flex items-center gap-2"><i class="fas fa-filter w-4 text-center"></i> Blur Filter</span>
-                        <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
-                    </div>
-                    <div class="flex items-center justify-between text-sm" id="step-colmap">
-                        <span class="text-gray-400 flex items-center gap-2"><i class="fas fa-cubes w-4 text-center"></i> SfM (COLMAP)</span>
-                        <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
-                    </div>
-                    <div class="flex items-center justify-between text-sm" id="step-train">
-                        <span class="text-gray-400 flex items-center gap-2"><i class="fas fa-magic w-4 text-center"></i> Gaussian Train</span>
-                        <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
-                    </div>
+                <div class="flex justify-between items-center mb-3 cursor-pointer"
+                    onclick="togglePanel('progress-panel', 'progress-chevron')">
+                    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">3. Pipeline Progress</h2>
+                    <i id="progress-chevron"
+                        class="fas fa-chevron-down text-gray-500 transition-transform duration-300"></i>
                 </div>
 
-                <!-- Mini Stats Grid -->
-                <div class="grid grid-cols-2 gap-2 mb-4">
-                    <div class="bg-gray-800/50 rounded p-2 text-center">
-                        <span class="block text-[10px] text-gray-500 uppercase">Images</span>
-                        <span id="stat-images" class="text-lg font-mono text-white font-bold">-</span>
-                    </div>
-                    <div class="bg-gray-800/50 rounded p-2 text-center">
-                        <span class="block text-[10px] text-gray-500 uppercase">Steps</span>
-                        <span id="stat-step" class="text-lg font-mono text-white font-bold">0</span>
-                    </div>
-                </div>
+                <div id="progress-panel" class="collapsible-content flex-1 flex flex-col min-h-0">
 
-                <!-- Terminal -->
-                <div class="flex-1 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 overflow-y-auto scrollbar-thin shadow-inner border border-gray-800" id="terminal">
-                    <div class="opacity-50">> System initialized.</div>
+                    <!-- Checklist with Inline Stats -->
+                    <div class="space-y-3 mb-4">
+                        <div class="flex items-center justify-between text-sm" id="step-extract">
+                            <span class="text-gray-400 flex items-center gap-2">
+                                <i class="fas fa-film w-4 text-center"></i> Extract Frames
+                                <span id="extract-count" class="text-xs text-blue-400 font-mono"></span>
+                            </span>
+                            <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm" id="step-filter">
+                            <span class="text-gray-400 flex items-center gap-2">
+                                <i class="fas fa-filter w-4 text-center"></i> Filter Images
+                                <span id="filter-count" class="text-xs text-blue-400 font-mono"></span>
+                            </span>
+                            <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm" id="step-colmap">
+                            <span class="text-gray-400 flex items-center gap-2">
+                                <i class="fas fa-cubes w-4 text-center"></i> SfM (COLMAP)
+                                <span id="colmap-progress" class="text-xs text-blue-400 font-mono"></span>
+                                <span id="registered-cams" class="text-xs text-green-400 font-mono"></span>
+                            </span>
+                            <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm" id="step-train">
+                            <span class="text-gray-400 flex items-center gap-2">
+                                <i class="fas fa-magic w-4 text-center"></i> Gaussian Train
+                                <span id="train-step-inline" class="text-xs text-green-400 font-mono"></span>
+                            </span>
+                            <span class="status-icon text-gray-600"><i class="fas fa-circle text-[8px]"></i></span>
+                        </div>
+                    </div>
+
+                    <!-- Terminal -->
+                    <div class="flex-1 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 overflow-y-auto scrollbar-thin shadow-inner border border-gray-800 min-h-[100px]"
+                        id="terminal">
+                        <div class="opacity-50">> System initialized.</div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Right: Viser Viewport -->
         <div class="w-3/4 glass-panel rounded-xl overflow-hidden relative flex flex-col shadow-2xl">
-            <div class="h-10 border-b border-gray-800 bg-gray-900/80 flex justify-between items-center px-4">
+            <div class="h-8 border-b border-gray-800 bg-gray-900/80 flex justify-between items-center px-3">
                 <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-red-500 transition-colors duration-300" id="viser-status"></span>
-                    <span class="text-xs font-medium text-gray-300 tracking-wide">3D VIEWPORT</span>
+                    <span class="w-2 h-2 rounded-full bg-red-500 transition-colors duration-300"
+                        id="viser-status"></span>
+                    <span class="text-[10px] font-medium text-gray-400 tracking-wide">3D VIEWPORT</span>
                 </div>
-                <a id="viser-link" href="#" target="_blank" class="text-[10px] text-blue-400 hover:text-blue-300 transition flex items-center gap-1">
-                    Open New Tab <i class="fas fa-external-link-alt"></i>
-                </a>
+                <button onclick="toggleViserLink()" class="text-[9px] text-gray-500 hover:text-gray-300 transition">
+                    <i id="viser-link-icon" class="fas fa-external-link-alt"></i>
+                </button>
             </div>
+            <a id="viser-link-bar" href="#" target="_blank"
+                class="hidden bg-gray-800 text-[9px] text-blue-400 hover:text-blue-300 text-center py-1 border-b border-gray-700">
+                Open in New Tab: <span id="viser-url-display"></span>
+            </a>
             <div class="flex-1 relative bg-black">
                 <iframe id="viser-frame" class="viser-frame"></iframe>
             </div>
@@ -208,7 +352,13 @@
         const hostname = window.location.hostname;
         const viserUrl = `http://${hostname}:8080`;
         document.getElementById('viser-frame').src = viserUrl;
-        document.getElementById('viser-link').href = viserUrl;
+        document.getElementById('viser-link-bar').href = viserUrl;
+        document.getElementById('viser-url-display').innerText = viserUrl;
+
+        function toggleViserLink() {
+            const bar = document.getElementById('viser-link-bar');
+            bar.classList.toggle('hidden');
+        }
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const socket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
@@ -237,7 +387,7 @@
             const el = document.getElementById(elementId);
             const iconContainer = el.querySelector('.status-icon');
             const textEl = el.querySelector('span');
-            
+
             textEl.classList.remove('text-white', 'font-bold', 'text-blue-400');
             iconContainer.innerHTML = '';
 
@@ -272,46 +422,95 @@
                 setStepStatus('step-filter', data.checklist.filter);
                 setStepStatus('step-colmap', data.checklist.colmap);
                 setStepStatus('step-train', data.checklist.train);
-                
+
                 if (data.checklist.train === 'running') deck.classList.remove('opacity-0');
                 else deck.classList.add('opacity-0');
             }
 
-            // 4. Button States
-            const trainBtn = document.getElementById('train-btn');
-            const pauseBtn = document.getElementById('pause-btn');
-            
+            // 4. Button States for Play/Pause
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            const playPauseIcon = document.getElementById('play-pause-icon');
+            const playPauseText = document.getElementById('play-pause-text');
+
             if (data.status === 'training') {
-                trainBtn.disabled = true;
-                trainBtn.classList.add('opacity-50', 'cursor-not-allowed');
-                
-                pauseBtn.disabled = false;
-                pauseBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-                
                 if (data.is_paused) {
-                    pauseBtn.innerHTML = '<i class="fas fa-play"></i> CONTINUE';
-                    pauseBtn.classList.replace('bg-gray-700', 'bg-green-700');
-                    pauseBtn.classList.replace('hover:bg-gray-600', 'hover:bg-green-600');
+                    playPauseBtn.classList.replace('bg-yellow-700', 'bg-green-700');
+                    playPauseBtn.classList.replace('hover:bg-yellow-600', 'hover:bg-green-600');
+                    playPauseIcon.classList.replace('fa-pause', 'fa-play');
+                    playPauseText.innerText = 'RESUME';
                     document.getElementById('status-text').innerText = "PAUSED";
                 } else {
-                    pauseBtn.innerHTML = '<i class="fas fa-pause"></i> PAUSE';
-                    pauseBtn.classList.replace('bg-green-700', 'bg-gray-700');
-                    pauseBtn.classList.replace('hover:bg-green-600', 'hover:bg-gray-600');
+                    playPauseBtn.classList.replace('bg-green-700', 'bg-yellow-700');
+                    playPauseBtn.classList.replace('hover:bg-green-600', 'hover:bg-yellow-600');
+                    playPauseIcon.classList.replace('fa-play', 'fa-pause');
+                    playPauseText.innerText = 'PAUSE';
                 }
             } else {
                 // IDLE or COMPLETED or ERROR
-                trainBtn.disabled = false;
-                trainBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-                trainBtn.innerHTML = '<i class="fas fa-play"></i> RESUME / TRAIN';
-                
-                pauseBtn.disabled = true;
-                pauseBtn.classList.add('opacity-50', 'cursor-not-allowed');
-                pauseBtn.innerHTML = '<i class="fas fa-pause"></i> PAUSE';
+                playPauseBtn.classList.remove('bg-yellow-700');
+                playPauseBtn.classList.add('bg-green-700');
+                playPauseBtn.classList.remove('hover:bg-yellow-600');
+                playPauseBtn.classList.add('hover:bg-green-600');
+                playPauseIcon.classList.remove('fa-pause');
+                playPauseIcon.classList.add('fa-play');
+                playPauseText.innerText = 'START TRAINING';
             }
 
-            // 5. Stats
-            document.getElementById('stat-images').innerText = data.image_count || "-";
-            document.getElementById('stat-step').innerText = data.step > 0 ? data.step : "-";
+            // 5. Stats - Inline with pipeline steps
+            // Update image counts inline
+            if (data.image_count && data.image_count !== '-') {
+                const filterCountEl = document.getElementById('filter-count');
+                if (filterCountEl) filterCountEl.innerText = `(${data.image_count})`;
+            }
+
+            // Update extract count from backend if available  
+            if (data.extracted_count) {
+                const extractEl = document.getElementById('extract-count');
+                if (extractEl) extractEl.innerText = `(${data.extracted_count})`;
+            }
+
+            // Update training step inline
+            const trainStepInline = document.getElementById('train-step-inline');
+            if (trainStepInline) {
+                if (data.step > 0 && data.status === 'training') {
+                    const pct = Math.round((data.step / data.max_steps) * 100);
+                    trainStepInline.innerText = `(${data.step}/${data.max_steps} - ${pct}%)`;
+                } else {
+                    trainStepInline.innerText = '';
+                }
+            }
+
+            // Update COLMAP progress inline
+            const colmapProgress = document.getElementById('colmap-progress');
+            if (colmapProgress) {
+                if (data.status === 'colmap' && data.colmap_progress) {
+                    if (data.colmap_progress.total > 0) {
+                        const pct = Math.round((data.colmap_progress.current / data.colmap_progress.total) * 100);
+                        colmapProgress.innerText = `(${data.colmap_progress.current}/${data.colmap_progress.total} - ${pct}%)`;
+                    } else if (data.colmap_progress.stage) {
+                        colmapProgress.innerText = `(${data.colmap_progress.stage})`;
+                    } else {
+                        colmapProgress.innerText = '';
+                    }
+                } else if (data.status !== 'colmap') {
+                    colmapProgress.innerText = '';
+                }
+            }
+
+            // Show registered cameras count
+            const regCamsEl = document.getElementById('registered-cams');
+            if (regCamsEl) {
+                if (data.registered_cameras > 0 && (data.checklist.colmap === 'completed' || data.status === 'training')) {
+                    regCamsEl.innerText = `📷 ${data.registered_cameras}`;
+                } else {
+                    regCamsEl.innerText = '';
+                }
+            }
+
+            // Step Progress (in training controls)
+            const stepPct = Math.min((data.step / data.max_steps) * 100, 100);
+            document.getElementById('step-progress-bar').style.width = `${stepPct}%`;
+            document.getElementById('step-progress-text').innerText = `${data.step} / ${data.max_steps}`;
 
             // 6. Progress Bar & Error Reset
             let progress = 0;
@@ -321,25 +520,65 @@
                 progress = 30 + (data.step / data.max_steps) * 70;
             } else if (data.status === 'completed') {
                 progress = 100;
+                // Auto-show video if just completed
+                if (!videoShown && data.checklist.train === 'completed') {
+                    showVideo();
+                    videoShown = true;
+                }
             } else if (data.status === 'error') {
                 document.getElementById('error-alert').classList.remove('hidden');
                 document.getElementById('progress-bar').classList.replace('bg-blue-600', 'bg-red-600');
             } else if (data.status === 'cancelled') {
-                 document.getElementById('progress-bar').style.width = "0%";
-                 document.getElementById('progress-bar').classList.replace('bg-blue-600', 'bg-gray-600');
+                document.getElementById('progress-bar').style.width = "0%";
+                document.getElementById('progress-bar').classList.replace('bg-blue-600', 'bg-gray-600');
             }
-            
+
             if (data.status !== 'error') {
                 document.getElementById('error-alert').classList.add('hidden');
                 if (data.status !== 'cancelled') document.getElementById('progress-bar').classList.replace('bg-red-600', 'bg-blue-600');
                 if (data.status !== 'cancelled') document.getElementById('progress-bar').classList.replace('bg-gray-600', 'bg-blue-600');
             }
-            
+
             if (data.status !== 'cancelled') document.getElementById('progress-bar').style.width = `${progress}%`;
 
-            // 6. Logs
+            // 7. Logs - append to terminal
             if (data.logs && data.logs.length > 0) {
                 data.logs.forEach(msg => appendLog(msg));
+            }
+        }
+
+        let videoShown = false;
+        function showVideo() {
+            const modal = document.getElementById('video-modal');
+            const video = document.getElementById('training-video');
+            const dlBtn = document.getElementById('download-video-btn');
+
+            // Cache buster
+            const videoUrl = `/data/training_evolution.mp4?t=${new Date().getTime()}`;
+            video.src = videoUrl;
+            dlBtn.href = videoUrl;
+
+            modal.classList.remove('hidden');
+            video.play();
+        }
+
+        function closeVideo() {
+            const modal = document.getElementById('video-modal');
+            const video = document.getElementById('training-video');
+            video.pause();
+            modal.classList.add('hidden');
+        }
+
+        function togglePanel(id, chevronId) {
+            const el = document.getElementById(id);
+            const chevron = document.getElementById(chevronId);
+
+            if (el.classList.contains('collapsed')) {
+                el.classList.remove('collapsed');
+                chevron.classList.remove('rotate-180');
+            } else {
+                el.classList.add('collapsed');
+                chevron.classList.add('rotate-180');
             }
         }
 
@@ -347,7 +586,14 @@
         const fileInput = document.getElementById('file-input');
         const dropZone = document.getElementById('drop-zone');
         const uploadBtn = document.getElementById('upload-btn');
-        let selectedFile = null;
+        let selectedFiles = []; // Support multiple files
+
+        // Slider handler
+        const maxStepsSlider = document.getElementById('max-steps-slider');
+        const maxStepsDisplay = document.getElementById('max-steps-display');
+        maxStepsSlider.oninput = () => {
+            maxStepsDisplay.innerText = maxStepsSlider.value;
+        };
 
         dropZone.onclick = () => fileInput.click();
         dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-blue-500', 'bg-gray-800/50'); };
@@ -355,34 +601,47 @@
         dropZone.ondrop = (e) => {
             e.preventDefault();
             dropZone.classList.remove('border-blue-500', 'bg-gray-800/50');
-            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
-        };
-        
-        fileInput.onchange = (e) => {
-            if (e.target.files.length) handleFile(e.target.files[0]);
+            if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
         };
 
-        function handleFile(file) {
-            selectedFile = file;
-            document.getElementById('file-name-display').innerText = file.name;
+        fileInput.onchange = (e) => {
+            if (e.target.files.length) handleFiles(e.target.files);
+        };
+
+        function handleFiles(files) {
+            selectedFiles = Array.from(files);
+            if (selectedFiles.length === 1) {
+                document.getElementById('file-name-display').innerText = selectedFiles[0].name;
+            } else {
+                document.getElementById('file-name-display').innerText = `${selectedFiles.length} files selected`;
+            }
             dropZone.classList.add('border-green-500/50');
             dropZone.querySelector('i').classList.replace('text-gray-500', 'text-green-500');
             dropZone.querySelector('i').classList.replace('fa-cloud-upload-alt', 'fa-file-video');
         }
 
         uploadBtn.onclick = async () => {
-            if (!selectedFile) return alert("Please select a video first.");
-            
+            if (selectedFiles.length === 0) return alert("Please select a video or images first.");
+
             const fps = document.getElementById('fps-select').value;
-            const quality = document.getElementById('quality-select').value;
-            const maxSteps = document.getElementById('max-steps').value;
+            const matcher = document.getElementById('matcher-select').value;
+            const maxSteps = maxStepsSlider.value;
+            const blurFilter = document.getElementById('blur-filter').checked;
+            const smartSelection = document.getElementById('smart-selection').checked;
 
             const formData = new FormData();
-            formData.append("file", selectedFile);
+            // If multiple files (images), append all; otherwise just the single file
+            if (selectedFiles.length > 1) {
+                selectedFiles.forEach(f => formData.append("files", f));
+            } else {
+                formData.append("file", selectedFiles[0]);
+            }
             formData.append("fps", fps);
-            formData.append("quality", quality);
+            formData.append("colmap_matcher", matcher);
             formData.append("max_steps", maxSteps);
-            
+            formData.append("blur_filter", blurFilter);
+            formData.append("smart_selection", smartSelection);
+
             uploadBtn.disabled = true;
             uploadBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> UPLOADING...';
 
@@ -391,8 +650,8 @@
                 const result = await res.json();
                 uploadBtn.innerHTML = '<i class="fas fa-check"></i> STARTED';
                 setTimeout(() => {
-                     uploadBtn.disabled = false;
-                     uploadBtn.innerText = 'START NEW PIPELINE';
+                    uploadBtn.disabled = false;
+                    uploadBtn.innerText = 'START NEW PIPELINE';
                 }, 2000);
             } catch (err) {
                 console.error(err);
@@ -407,14 +666,14 @@
             const formData = new FormData();
             formData.append("max_steps", maxSteps);
             formData.append("resume", resume);
-            
+
             await fetch('/train', { method: 'POST', body: formData });
         }
 
         async function setAnimationView() {
             const res = await fetch('/set_view', { method: 'POST' });
             const data = await res.json();
-            if(data.status === 'ok') appendLog("Animation view set!");
+            if (data.status === 'ok') appendLog("Animation view set!");
             else appendLog("Error setting view: " + data.message);
         }
 
@@ -423,21 +682,41 @@
             const data = await res.json();
             appendLog("Video render started...");
         }
-        
+
+        async function togglePlayPause() {
+            // If not training, start training
+            // If training but not paused, pause
+            // If training and paused, resume
+            const btn = document.getElementById('play-pause-btn');
+            const textEl = document.getElementById('play-pause-text');
+
+            if (textEl.innerText === 'PAUSE') {
+                await control('pause');
+            } else if (textEl.innerText === 'RESUME') {
+                await control('resume');
+            } else {
+                // Start training
+                const maxSteps = maxStepsSlider.value;
+                const formData = new FormData();
+                formData.append("max_steps", maxSteps);
+                formData.append("resume", "false");
+                await fetch('/train', { method: 'POST', body: formData });
+            }
+        }
+
         async function togglePause() {
-            const btn = document.getElementById('pause-btn');
-            const isPaused = btn.innerText.includes("CONTINUE");
-            const action = isPaused ? "resume" : "pause";
-            await control(action);
+            // Legacy, kept for compatibility
+            await togglePlayPause();
         }
 
         async function control(action) {
             await fetch('/control', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: action})
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: action })
             });
         }
     </script>
 </body>
+
 </html>

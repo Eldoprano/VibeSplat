@@ -8,7 +8,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "websockets",
-    "torch",
+    "torch==2.4.0",
     "viser",
     "opencv-python-headless",
     "tqdm",
@@ -31,3 +31,7 @@ packages = ["backend"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
+extra-index-url = [
+    "https://download.pytorch.org/whl/cu124",
+    "https://docs.gsplat.studio/whl/pt24cu124"
+]

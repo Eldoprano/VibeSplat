@@ -22,6 +22,7 @@ import json
 import socket
 import time
 from pathlib import Path
+from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse # Updated import
@@ -60,6 +61,8 @@ with contextlib.redirect_stdout(io.StringIO()):
 engine = TrainerEngine(viser_server)
 
 app.mount("/static", StaticFiles(directory="templates"), name="static")
+app.mount("/images", StaticFiles(directory="workspace/data/images"), name="images")
+app.mount("/data", StaticFiles(directory="workspace/data"), name="data")
 
 @app.get("/")
 async def get_index():
@@ -78,26 +81,58 @@ async def download_ply():
 @app.post("/upload")
 async def upload_video(
     background_tasks: BackgroundTasks, 
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
     fps: int = Form(2),
     max_steps: int = Form(3000),
-    quality: str = Form("medium")
+    quality: str = Form("medium"),
+    blur_filter: bool = Form(False),
+    smart_selection: bool = Form(False),
+    colmap_matcher: str = Form("sequential")
 ):
     workspace = Path("workspace")
     workspace.mkdir(exist_ok=True)
     
-    safe_filename = Path(file.filename).name
-    video_path = workspace / safe_filename
+    input_path = None
     
-    with open(video_path, "wb") as buffer:
-        buffer.write(await file.read())
-    
-    # Console log for verbosity
-    console.print(f"[bold green]Video Uploaded:[/bold green] {safe_filename} (FPS: {fps})")
+    # Handle multiple image files
+    if files and len(files) > 0 and files[0].filename:
+        images_dir = workspace / "data" / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Clear previous images
+        for old in images_dir.glob("*"):
+            old.unlink()
+        
+        for i, f in enumerate(files):
+            ext = Path(f.filename).suffix
+            dest = images_dir / f"{i:04d}{ext}"
+            with open(dest, "wb") as buffer:
+                buffer.write(await f.read())
+        
+        console.print(f"[bold green]Images Uploaded:[/bold green] {len(files)} files")
+        input_path = images_dir  # Signal that extraction should be skipped
+    elif file and file.filename:
+        safe_filename = Path(file.filename).name
+        input_path = workspace / safe_filename
+        
+        with open(input_path, "wb") as buffer:
+            buffer.write(await file.read())
+        
+        console.print(f"[bold green]File Uploaded:[/bold green] {safe_filename} (FPS: {fps})")
+    else:
+        return {"status": "error", "message": "No file uploaded"}
 
     def pipeline_task():
         try:
-            success = engine.process_video(video_path, workspace / "data", fps=fps)
+            success = engine.process_video(
+                input_path, 
+                workspace / "data", 
+                fps=fps,
+                smart_selection=smart_selection,
+                blur_filter=blur_filter,
+                matcher_type=colmap_matcher
+            )
             if success:
                 engine.start_training(workspace / "data", max_steps=max_steps)
             else:
@@ -111,7 +146,7 @@ async def upload_video(
             
     background_tasks.add_task(pipeline_task)
     
-    return {"status": "Processing started", "file": safe_filename}
+    return {"status": "Processing started"}
 
 @app.post("/train")
 async def train_model(
@@ -189,7 +224,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 "max_steps": engine.max_steps,
                 "status": engine.status,
                 "checklist": engine.checklist,
-                "image_count": engine.image_count,
+                "image_count": f"{engine.used_images_count} / {engine.extracted_images_count}" if engine.extracted_images_count > 0 else "-",
+                "extracted_count": engine.extracted_images_count,
+                "used_count": engine.used_images_count,
+                "colmap_progress": getattr(engine, 'colmap_progress', {"stage": "", "current": 0, "total": 0}),
+                "registered_cameras": len(engine.train_cameras) if engine.train_cameras else 0,
                 "pipeline_message": engine.pipeline_message,
                 "elapsed_time": elapsed,
                 "is_paused": engine.paused,
