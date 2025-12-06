@@ -171,7 +171,7 @@
 
                 <div id="config-panel" class="collapsible-content">
                     <div class="grid grid-cols-2 gap-3 mb-4">
-                        <div>
+                        <div id="fps-container">
                             <label class="block text-[10px] text-gray-500 mb-1 uppercase">FPS Extraction</label>
                             <select id="fps-select"
                                 class="w-full bg-gray-800 border border-gray-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 transition">
@@ -206,6 +206,11 @@
                                 class="text-[10px] text-gray-300 uppercase cursor-pointer select-none">Smart
                                 Select</label>
                         </div>
+                    </div>
+                    <div id="smart-info"
+                        class="hidden mb-4 p-2 bg-blue-900/30 border border-blue-700/50 rounded text-[10px] text-blue-300">
+                        <i class="fas fa-magic mr-1"></i> Smart Select extracts at 10fps then filters for diverse,
+                        high-quality frames
                     </div>
 
                     <div class="border-2 border-dashed border-gray-700 bg-gray-800/30 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-gray-800/50 transition cursor-pointer group"
@@ -448,31 +453,49 @@
             } else {
                 // IDLE or COMPLETED or ERROR
                 playPauseBtn.classList.remove('bg-yellow-700');
-                playPauseBtn.classList.add('bg-green-700');
                 playPauseBtn.classList.remove('hover:bg-yellow-600');
-                playPauseBtn.classList.add('hover:bg-green-600');
                 playPauseIcon.classList.remove('fa-pause');
                 playPauseIcon.classList.add('fa-play');
-                playPauseText.innerText = 'START TRAINING';
+
+                if (data.status === 'completed') {
+                    // Show CONTINUE TRAINING option
+                    playPauseBtn.classList.remove('bg-green-700');
+                    playPauseBtn.classList.add('bg-blue-700');
+                    playPauseBtn.classList.remove('hover:bg-green-600');
+                    playPauseBtn.classList.add('hover:bg-blue-600');
+                    playPauseText.innerText = 'CONTINUE TRAINING';
+                } else {
+                    playPauseBtn.classList.add('bg-green-700');
+                    playPauseBtn.classList.remove('bg-blue-700');
+                    playPauseBtn.classList.add('hover:bg-green-600');
+                    playPauseBtn.classList.remove('hover:bg-blue-600');
+                    playPauseText.innerText = 'START TRAINING';
+                }
             }
 
             // 5. Stats - Inline with pipeline steps
-            // Update image counts inline
-            if (data.image_count && data.image_count !== '-') {
-                const filterCountEl = document.getElementById('filter-count');
-                if (filterCountEl) filterCountEl.innerText = `(${data.image_count})`;
+            // Update extract count 
+            const extractEl = document.getElementById('extract-count');
+            if (extractEl) {
+                if (data.extracted_count > 0) {
+                    extractEl.innerText = `(${data.extracted_count})`;
+                }
             }
 
-            // Update extract count from backend if available  
-            if (data.extracted_count) {
-                const extractEl = document.getElementById('extract-count');
-                if (extractEl) extractEl.innerText = `(${data.extracted_count})`;
+            // Update filter count (used/total)
+            const filterCountEl = document.getElementById('filter-count');
+            if (filterCountEl) {
+                if (data.used_count > 0 && data.extracted_count > 0) {
+                    filterCountEl.innerText = `(${data.used_count}/${data.extracted_count})`;
+                } else if (data.image_count && data.image_count !== '-') {
+                    filterCountEl.innerText = `(${data.image_count})`;
+                }
             }
 
             // Update training step inline
             const trainStepInline = document.getElementById('train-step-inline');
             if (trainStepInline) {
-                if (data.step > 0 && data.status === 'training') {
+                if (data.step > 0 && (data.status === 'training' || data.status === 'completed')) {
                     const pct = Math.round((data.step / data.max_steps) * 100);
                     trainStepInline.innerText = `(${data.step}/${data.max_steps} - ${pct}%)`;
                 } else {
@@ -595,6 +618,20 @@
             maxStepsDisplay.innerText = maxStepsSlider.value;
         };
 
+        // Smart Select toggle - hide/show FPS when Smart Select is enabled
+        const smartSelectCheckbox = document.getElementById('smart-selection');
+        const fpsContainer = document.getElementById('fps-container');
+        const smartInfo = document.getElementById('smart-info');
+        smartSelectCheckbox.onchange = () => {
+            if (smartSelectCheckbox.checked) {
+                fpsContainer.classList.add('opacity-50', 'pointer-events-none');
+                smartInfo.classList.remove('hidden');
+            } else {
+                fpsContainer.classList.remove('opacity-50', 'pointer-events-none');
+                smartInfo.classList.add('hidden');
+            }
+        };
+
         dropZone.onclick = () => fileInput.click();
         dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-blue-500', 'bg-gray-800/50'); };
         dropZone.ondragleave = () => { dropZone.classList.remove('border-blue-500', 'bg-gray-800/50'); };
@@ -687,13 +724,21 @@
             // If not training, start training
             // If training but not paused, pause
             // If training and paused, resume
-            const btn = document.getElementById('play-pause-btn');
+            // If completed, continue with more steps
             const textEl = document.getElementById('play-pause-text');
 
             if (textEl.innerText === 'PAUSE') {
                 await control('pause');
             } else if (textEl.innerText === 'RESUME') {
                 await control('resume');
+            } else if (textEl.innerText === 'CONTINUE' || textEl.innerText === 'CONTINUE TRAINING') {
+                // Continue training with new max_steps
+                const maxSteps = maxStepsSlider.value;
+                const formData = new FormData();
+                formData.append("max_steps", maxSteps);
+                formData.append("resume", "true");
+                await fetch('/train', { method: 'POST', body: formData });
+                appendLog(`Continuing training to ${maxSteps} steps...`);
             } else {
                 // Start training
                 const maxSteps = maxStepsSlider.value;

@@ -331,8 +331,10 @@ class TrainerEngine:
                     self.log(f"ZIP Extraction failed: {e}")
                     return False
             else:
-                self.log(f"Extracting frames from video: {input_path.name} at {fps} FPS")
-                cmd = ["ffmpeg", "-y", "-i", str(input_path), "-qscale:v", "1", "-qmin", "1", "-vf", f"fps={fps}", str(images_dir / "%04d.jpg")]
+                # Smart selection extracts at 10fps (dense) then filters for diversity
+                extract_fps = 10 if smart_selection else fps
+                self.log(f"Extracting frames from video: {input_path.name} at {extract_fps} FPS" + (" (Smart)" if smart_selection else ""))
+                cmd = ["ffmpeg", "-y", "-i", str(input_path), "-qscale:v", "1", "-qmin", "1", "-vf", f"fps={extract_fps}", str(images_dir / "%04d.jpg")]
                 try:
                     self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     self.current_process.wait()
@@ -873,8 +875,8 @@ class TrainerEngine:
                     # Frustum scale - determines the "depth" of the frustum visualization
                     frustum_scale = 0.25  # Larger for visibility
                     
-                    # Add Frustum
-                    self.viser_server.scene.add_camera_frustum(
+                    # Add Frustum with image
+                    frustum = self.viser_server.scene.add_camera_frustum(
                         f"/cameras/cam_{i}",
                         fov=fov_y,
                         aspect=aspect,
@@ -885,23 +887,27 @@ class TrainerEngine:
                         image=thumbnails.get(i)  # Viser can display image directly on frustum!
                     )
                     
-                    # Add Clickable Sphere at camera position
-                    node = self.viser_server.scene.add_icosphere(
-                        f"/cameras/cam_{i}/click",
-                        radius=0.04,
-                        color=(255, 200, 50),
-                        position=t
-                    )
-                    
-                    # Capture values by VALUE for click handler
-                    def make_click_handler(pos, rot, img_name):
+                    # Make frustum clickable - teleport to this camera view
+                    def make_click_handler(pos, orientation, img_name):
                         def handler(event):
                             event.client.camera.position = pos
-                            event.client.camera.wxyz = viser.transforms.SO3.from_matrix(rot).wxyz
+                            event.client.camera.wxyz = orientation
                             self.log(f"Jumped to camera: {img_name}")
                         return handler
                     
-                    node.on_click(make_click_handler(t.copy(), R.copy(), cam.get("name", f"cam_{i}")))
+                    frustum.on_click(make_click_handler(t.copy(), wxyz, cam.get("name", f"cam_{i}")))
+                    
+                    # Set initial camera position and animation pose from FIRST camera
+                    if i == 0:
+                        # Set all connected clients to first camera view
+                        for client in self.viser_server.get_clients().values():
+                            client.camera.position = t
+                            client.camera.wxyz = wxyz
+                        
+                        # Auto-set animation pose if not already set
+                        if self.animation_pose is None:
+                            self.animation_pose = (t.copy(), wxyz)
+                            self.log("Auto-set animation view from first camera")
                     
                 except Exception as e:
                     self.log(f"Warning: Failed to add camera {i}: {e}")
@@ -945,13 +951,18 @@ class TrainerEngine:
         path.parent.mkdir(parents=True, exist_ok=True)
         with torch.no_grad():
             m = params["means"].cpu().numpy()
-            s = torch.exp(params["scales"]).cpu().numpy()
-            q = params["quats"].cpu().numpy()
+            # Keep scales as log-encoded (SuperSplat expects log scale)
+            s = params["scales"].cpu().numpy()
+            # Normalize quaternions and ensure w-first format
+            q = F.normalize(params["quats"], dim=-1).cpu().numpy()
             o = torch.sigmoid(params["opacities"]).cpu().numpy()
+            # SH coefficient DC term - convert from our encoding back to standard
             c = params["colors"].squeeze(1).cpu().numpy() * 0.28209 + 0.5
+            c = np.clip(c, 0, 1)  # Ensure valid color range
             
+            # SuperSplat-compatible PLY format
             header = f"""ply
-format ascii 1.0
+format binary_little_endian 1.0
 element vertex {len(m)}
 property float x
 property float y
@@ -969,10 +980,20 @@ property float rot_2
 property float rot_3
 end_header
 """
-            with open(path, "w") as f:
-                f.write(header)
+            with open(path, "wb") as f:
+                f.write(header.encode('ascii'))
+                # Write binary data for each gaussian
                 for i in range(len(m)):
-                    f.write(f"{m[i,0]} {m[i,1]} {m[i,2]} {c[i,0]} {c[i,1]} {c[i,2]} {o[i]} {s[i,0]} {s[i,1]} {s[i,2]} {q[i,0]} {q[i,1]} {q[i,2]} {q[i,3]}\n")
+                    # Position (x, y, z)
+                    f.write(struct.pack('<fff', m[i,0], m[i,1], m[i,2]))
+                    # SH DC coefficients (f_dc_0, f_dc_1, f_dc_2)
+                    f.write(struct.pack('<fff', c[i,0], c[i,1], c[i,2]))
+                    # Opacity (already sigmoid-ed)
+                    f.write(struct.pack('<f', o[i]))
+                    # Log-encoded scales
+                    f.write(struct.pack('<fff', s[i,0], s[i,1], s[i,2]))
+                    # Quaternion (w, x, y, z) - SuperSplat uses rot_0=w
+                    f.write(struct.pack('<ffff', q[i,0], q[i,1], q[i,2], q[i,3]))
 
     def control(self, action: str):
         if action == "pause": self.paused = True
